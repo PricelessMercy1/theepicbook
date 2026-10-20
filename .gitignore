@@ -1,2 +1,9 @@
 node_modules
 .DS_Store
+
+# Ansible / SSH
+*.pem
+*.key
+epicbook-key
+ansible/group_vars/*/vault.yml
+*.retry
