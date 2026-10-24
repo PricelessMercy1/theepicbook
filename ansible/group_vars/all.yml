@@ -5,3 +5,4 @@ backend_private_ip: "10.20.2.4"
 mysql_fqdn: "epicbook-mysql-e7585b.mysql.database.azure.com"
 backend_app_port: 8080
 db_name: "bookstore"
+app_repo_url: "https://github.com/PricelessMercy1/theepicbook.git"

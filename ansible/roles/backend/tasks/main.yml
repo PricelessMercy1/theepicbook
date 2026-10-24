@@ -1,0 +1,85 @@
+---
+- name: Add the NodeSource repository for Node.js 20
+  ansible.builtin.deb822_repository:
+    name: nodesource
+    types: [deb]
+    uris: https://deb.nodesource.com/node_20.x
+    suites: [nodistro]
+    components: [main]
+    signed_by: https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key
+    state: present
+    enabled: true
+
+- name: Install Node.js and MySQL client tools
+  ansible.builtin.apt:
+    name:
+      - nodejs
+      - mysql-client
+    state: present
+    update_cache: true
+
+- name: Create the application directory
+  ansible.builtin.file:
+    path: /opt/epicbook
+    state: directory
+    owner: azureuser
+    group: azureuser
+    mode: "0755"
+
+# Runs as azureuser (the login user), so the files belong to the account that runs the app
+- name: Deploy or update the EpicBook application code
+  ansible.builtin.git:
+    repo: "{{ app_repo_url }}"
+    dest: /opt/epicbook
+    version: main
+    force: true
+  become: false
+  register: app_code
+  notify: Restart epicbook
+
+- name: Check whether node_modules exists
+  ansible.builtin.stat:
+    path: /opt/epicbook/node_modules
+  register: node_modules_dir
+
+- name: Install Node.js dependencies from the lock file
+  ansible.builtin.command: npm ci --omit=dev
+  args:
+    chdir: /opt/epicbook
+  become: false
+  when: app_code.changed or not node_modules_dir.stat.exists
+  notify: Restart epicbook
+
+- name: Create the application settings directory
+  ansible.builtin.file:
+    path: /etc/epicbook
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+# The only place the database credentials are written; root-only, never printed
+- name: Deploy the protected database settings file
+  ansible.builtin.template:
+    src: epicbook.env.j2
+    dest: /etc/epicbook/epicbook.env
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+  notify: Restart epicbook
+
+- name: Deploy the systemd service unit
+  ansible.builtin.template:
+    src: epicbook.service.j2
+    dest: /etc/systemd/system/epicbook.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart epicbook
+
+- name: Enable the EpicBook service at boot
+  ansible.builtin.systemd:
+    name: epicbook
+    enabled: true
+    daemon_reload: true

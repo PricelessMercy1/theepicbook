@@ -12,4 +12,5 @@
       - ca-certificates
       - gnupg
       - python3-pymysql
+      - python3-debian
     state: present

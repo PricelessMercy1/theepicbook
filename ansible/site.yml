@@ -21,3 +21,9 @@
       tags: [backend]
     - role: database
       tags: [database]
+  post_tasks:
+    - name: Ensure the EpicBook service is running
+      ansible.builtin.systemd:
+        name: epicbook
+        state: started
+      tags: [backend, database]
