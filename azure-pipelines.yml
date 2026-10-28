@@ -1,19 +1,203 @@
-# Starter pipeline
-# Start with a minimal pipeline that you can customize to build and deploy your code.
-# Add steps that build, run tests, deploy, and more:
-# https://aka.ms/yaml
-
+# EpicBook application pipeline
+# Prepare -> Validate -> Configure and Deploy -> Verify
 trigger:
-- main
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - ansible/*
+      - server.js
+      - package.json
+      - package-lock.json
+      - routes/*
+      - models/*
+      - views/*
+      - public/*
+      - config/*
+      - db/*
+      - azure-pipelines.yml
 
+# Self-hosted agent that can reach both servers over SSH
 pool:
-  vmImage: ubuntu-latest
+  name: SelfHostedPool
 
-steps:
-- script: echo Hello, world!
-  displayName: 'Run a one-line script'
+variables:
+  - group: Epicbook-mysql-secrets
 
-- script: |
-    echo Add other tasks to build, test, and deploy your project.
-    echo See https://aka.ms/yaml
-  displayName: 'Run a multi-line script'
+stages:
+  # ---------------------------------------------------------------
+  - stage: Prepare
+    displayName: 'Prepare'
+    jobs:
+      - job: PrepareTools
+        displayName: 'Verify Ansible and fetch the SSH key'
+        steps:
+          - checkout: self
+            clean: true
+
+          - script: |
+              set -euo pipefail
+              VENV="$HOME/ansible-onboarding/.venv"
+              if [ ! -x "$VENV/bin/ansible-playbook" ]; then
+                python3 -m venv "$VENV"
+                "$VENV/bin/pip" install --quiet ansible-core
+              fi
+              "$VENV/bin/ansible-galaxy" collection install community.mysql ansible.posix
+              "$VENV/bin/ansible-playbook" --version | head -n 1
+            displayName: 'Install or verify Ansible and the required collections'
+
+          # The key is downloaded to a temporary path for this job only
+          - task: DownloadSecureFile@1
+            name: sshKey
+            displayName: 'Download the SSH private key (Secure File)'
+            inputs:
+              secureFile: 'epicbook-key'
+
+          - script: |
+              set -euo pipefail
+              chmod 600 "$(sshKey.secureFilePath)"
+              echo "SSH key downloaded to a temporary path and set to permissions 600."
+            displayName: 'Restrict key permissions'
+
+  # ---------------------------------------------------------------
+  - stage: Validate
+    displayName: 'Validate'
+    dependsOn: Prepare
+    jobs:
+      - job: ValidateAnsible
+        displayName: 'Inventory, syntax, secrets and connectivity'
+        steps:
+          - checkout: self
+            clean: true
+
+          # Each stage can run on a clean workspace, so the key is fetched again
+          - task: DownloadSecureFile@1
+            name: sshKey
+            displayName: 'Download the SSH private key (Secure File)'
+            inputs:
+              secureFile: 'epicbook-key'
+
+          - script: |
+              set -euo pipefail
+              export PATH="$HOME/ansible-onboarding/.venv/bin:$PATH"
+              export ANSIBLE_NOCOLOR=1 ANSIBLE_DEPRECATION_WARNINGS=False
+              echo "--- Inventory ---"
+              ansible-inventory -i ansible/inventory/hosts.ini --list > /dev/null
+              echo "Inventory is valid"
+              echo "--- Handoff values ---"
+              for key in backend_private_ip mysql_fqdn backend_app_port db_name; do
+                if grep -Eq "^${key}: *\"?[^\" ]+" ansible/group_vars/all.yml; then
+                  echo "${key} is present"
+                else
+                  echo "${key} is MISSING"
+                  exit 1
+                fi
+              done
+              echo "--- Secrets available (values are not printed) ---"
+              if [ -n "$DB_ADMIN_USERNAME" ]; then echo "database username is set"; else echo "database username is NOT set"; exit 1; fi
+              if [ -n "$DB_ADMIN_PASSWORD" ]; then echo "database password is set"; else echo "database password is NOT set"; exit 1; fi
+              echo "--- Syntax check ---"
+              ansible-playbook -i ansible/inventory/hosts.ini ansible/site.yml --syntax-check
+            displayName: 'Validate inventory, handoff values, secrets and syntax'
+            env:
+              DB_ADMIN_USERNAME: $(mysqlAdminUsername)
+              DB_ADMIN_PASSWORD: $(mysqlAdminPassword)
+
+          # Host keys are recorded on first contact so SSH checking stays enabled
+          - script: |
+              set -euo pipefail
+              export PATH="$HOME/ansible-onboarding/.venv/bin:$PATH"
+              export ANSIBLE_NOCOLOR=1 ANSIBLE_DEPRECATION_WARNINGS=False
+              chmod 600 "$(sshKey.secureFilePath)"
+              mkdir -p "$HOME/.ssh"
+              HOSTS=$(grep -oE 'ansible_host=[0-9.]+' ansible/inventory/hosts.ini | cut -d= -f2)
+              ssh-keyscan -H $HOSTS >> "$HOME/.ssh/known_hosts" 2>/dev/null
+              ansible -i ansible/inventory/hosts.ini all -m ping --private-key "$(sshKey.secureFilePath)"
+            displayName: 'Test SSH connectivity to the frontend and backend'
+
+  # ---------------------------------------------------------------
+  - stage: Deploy
+    displayName: 'Configure and Deploy'
+    dependsOn: Validate
+    jobs:
+      - job: RunPlaybook
+        displayName: 'Run the Ansible playbook'
+        steps:
+          - checkout: self
+            clean: true
+
+          - task: DownloadSecureFile@1
+            name: sshKey
+            displayName: 'Download the SSH private key (Secure File)'
+            inputs:
+              secureFile: 'epicbook-key'
+
+          # Credentials go into a temporary, owner-only file that is deleted on exit,
+          # so they never appear on a command line or in the log.
+          - script: |
+              set -euo pipefail
+              export PATH="$HOME/ansible-onboarding/.venv/bin:$PATH"
+              export ANSIBLE_NOCOLOR=1 ANSIBLE_DEPRECATION_WARNINGS=False
+              chmod 600 "$(sshKey.secureFilePath)"
+              EXTRA="$(Agent.TempDirectory)/epicbook-extra.yml"
+              LOG="$(Agent.TempDirectory)/play.log"
+              trap 'rm -f "$EXTRA"' EXIT
+              umask 077
+              printf 'db_admin_username: "%s"\ndb_admin_password: "%s"\n' "$DB_ADMIN_USERNAME" "$DB_ADMIN_PASSWORD" > "$EXTRA"
+              set +e
+              ansible-playbook -i ansible/inventory/hosts.ini ansible/site.yml \
+                --private-key "$(sshKey.secureFilePath)" \
+                -e "@$EXTRA" 2>&1 | tee "$LOG"
+              STATUS=${PIPESTATUS[0]}
+              set -e
+              sed -n '/PLAY RECAP/,$p' "$LOG" > "$(Build.ArtifactStagingDirectory)/recap.txt"
+              exit $STATUS
+            displayName: 'Configure both servers and deploy EpicBook'
+            env:
+              DB_ADMIN_USERNAME: $(mysqlAdminUsername)
+              DB_ADMIN_PASSWORD: $(mysqlAdminPassword)
+
+          # Only the recap lines are published, never the full log or any secret
+          - task: PublishPipelineArtifact@1
+            displayName: 'Publish the play recap'
+            condition: succeededOrFailed()
+            inputs:
+              targetPath: '$(Build.ArtifactStagingDirectory)/recap.txt'
+              artifact: 'ansible-recap'
+              publishLocation: 'pipeline'
+
+  # ---------------------------------------------------------------
+  - stage: Verify
+    displayName: 'Verify'
+    dependsOn: Deploy
+    jobs:
+      - job: VerifyResult
+        displayName: 'Confirm zero failed, zero unreachable and a live site'
+        steps:
+          - checkout: self
+            clean: true
+
+          - download: current
+            artifact: ansible-recap
+            displayName: 'Download the play recap'
+
+          - script: |
+              set -euo pipefail
+              RECAP="$(Pipeline.Workspace)/ansible-recap/recap.txt"
+              echo "=========== PLAY RECAP ==========="
+              cat "$RECAP"
+              echo "=================================="
+              if grep -Eq 'failed=[1-9]|unreachable=[1-9]' "$RECAP"; then
+                echo "A host reported failed or unreachable tasks."
+                exit 1
+              fi
+              echo "Hosts configured:"
+              grep -E ': ok=' "$RECAP" | awk '{print " - " $1}'
+              echo "Result: zero failed hosts and zero unreachable hosts."
+              FRONT=$(grep -A1 '^\[frontend\]' ansible/inventory/hosts.ini | grep -oE 'ansible_host=[0-9.]+' | cut -d= -f2)
+              CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://$FRONT")
+              echo "Frontend HTTP status: $CODE"
+              if [ "$CODE" != "200" ]; then exit 1; fi
+              echo "EpicBook is live. Open this address in a browser: http://$FRONT"
+            displayName: 'Verify the deployment (no secrets printed)'
