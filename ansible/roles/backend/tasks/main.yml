@@ -22,11 +22,11 @@
   ansible.builtin.file:
     path: /opt/epicbook
     state: directory
-    owner: azureuser
-    group: azureuser
+    owner: ubuntu
+    group: ubuntu
     mode: "0755"
 
-# Runs as azureuser (the login user), so the files belong to the account that runs the app
+# Runs as ubuntu (the login user), so the files belong to the account that runs the app
 - name: Deploy or update the EpicBook application code
   ansible.builtin.git:
     repo: "{{ app_repo_url }}"
