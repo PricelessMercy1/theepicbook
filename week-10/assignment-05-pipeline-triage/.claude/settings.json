@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "deny": [
+      "Edit",
+      "Write",
+      "NotebookEdit",
+      "Bash(git push:*)",
+      "Bash(git commit:*)",
+      "Bash(terraform:*)",
+      "Bash(ansible:*)",
+      "Bash(ansible-playbook:*)",
+      "Bash(az:*)",
+      "Bash(curl:*)",
+      "Bash(rm:*)",
+      "Bash(env:*)",
+      "Bash(printenv:*)",
+      "Bash(echo:*)",
+      "Bash(export:*)",
+      "Bash(set:*)"
+    ]
+  }
+}

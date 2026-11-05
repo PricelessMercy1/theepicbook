@@ -1,0 +1,41 @@
+========================================
+CI/CD Pipeline Failure Triage Report
+========================================
+Full Name: Aanuoluwapo Tolu-Omodara
+Timestamp: 2026-11-05T10:20:50Z
+Provider: Azure DevOps
+Organization: https://dev.azure.com/aanumary
+Project: EpicBook-Deployment
+
+Category matches are heuristic evidence; counts represent findings.
+----------------------------------------
+Infrastructure Pipeline (Pipeline ID: 4)
+----------------------------------------
+Run ID: 20
+Branch: refs/heads/main
+Status: completed
+Result: succeeded
+Completion Time: 2026-10-27T11:22:23.644157+00:00
+[PASS] Infrastructure Pipeline — Latest completed run succeeded
+
+----------------------------------------
+Application Pipeline (Pipeline ID: 5)
+----------------------------------------
+Run ID: 25
+Branch: refs/heads/drill/pipeline-failure
+Status: completed
+Result: succeeded
+Completion Time: 2026-11-05T10:14:47.749598+00:00
+[PASS] Application Pipeline — Latest completed run succeeded
+
+
+Summary:
+PASS: 2
+WARN: 0
+FAIL: 0
+ERROR: 0
+Overall Status: HEALTHY
+Script Exit Code: 0
+Report File: /home/user/ansible-onboarding/theepicbook/week-10/assignment-05-pipeline-triage/reports/pipeline-health-report.txt
+Infrastructure Log: /home/user/ansible-onboarding/theepicbook/week-10/assignment-05-pipeline-triage/reports/infra-last-run.log
+Application Log: /home/user/ansible-onboarding/theepicbook/week-10/assignment-05-pipeline-triage/reports/app-last-run.log
